@@ -12,7 +12,9 @@ const chromaClient = new ChromaClient({
 chromaClient.heartbeat();
 const WEB_COLLECTION = `WEB_SCAPED_DATA_COLLECTION-1`;
 
-const openai = new OpenAI(process.env.OpenAI_API_Key);
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+})
 
 const scrapewebappinfo = async (url = "") => {
   const { data } = await axios.get(url);
@@ -66,15 +68,15 @@ async function ingest(url = "") {
       const bodyEmbedding = await generatevectorEmbeddings({ text: chunk });
       await insertIntoDb({ embedding: bodyEmbedding, url, head, body: chunk });
     }
-  
+
     for (const link of internalLinks) {
       const _url = `${url}${link}`;
       ingest(_url);
     }
-  
+
     console.log(`Ingested ${url} successfully`);
   } catch (error) {
-    throw new Error('Could not insert into database for ' + url)
+    throw new Error("Could not insert into database for " + url);
   }
 }
 
@@ -89,6 +91,50 @@ async function insertIntoDb({ embedding, url, body = "", head = "" }) {
     metadatas: [{ url, body, head }],
   });
 }
+
+const AIChatBot = async (question = "") => {
+  const questionEmbeddings = await generatevectorEmbeddings({ text: question });
+  const collection = await chromaClient.getOrCreateCollection({
+    name: WEB_COLLECTION,
+  });
+  const collectionResult = await collection.query({
+    nResults: 3,
+    queryEmbeddings: questionEmbeddings,
+  });
+  const body = collectionResult.metadatas[0].body
+    .map((embedding) => embedding.body)
+    .filter((embedding) => embedding.trim() !== "" && !!embedding);
+
+  const url = collectionResult.metadatas[0].body
+    .map((embedding) => embedding.url)
+    .filter((embedding) => embedding.trim() !== "" && !!embedding);
+
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o",
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are an AI support agent. expert in providing support to users on behalf of the web page. Given the context about page content, reply the user accordingly.",
+      },
+      {
+        role: "user",
+        content: `
+                Query: ${question}\n\n
+                URL: ${url.join(", ")}
+                Retrived Context: ${body.join(", ")}
+            `,
+      },
+    ],
+  });
+
+  console.log({
+    messages: response.choices[0].message.content,
+    url: url[0],
+  });
+};
+
+AIChatBot("what is the page all about ?");
 
 scrapewebappinfo(process.env.Scrape_URL);
 
